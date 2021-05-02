@@ -15,15 +15,24 @@ import (
 const size = "t3.micro"
 
 type provider struct {
-	provider          *aws.Provider
-	invokeOption      pulumi.ResourceOrInvokeOption
-	availabilityZones []string
+	provider     *aws.Provider
+	invokeOption pulumi.ResourceOrInvokeOption
 }
 
 type instanceArgs struct {
 	userData       string
 	amiId, groupId pulumi.StringInput
 	keyName        pulumi.StringPtrInput
+}
+
+var regions = []string{
+	"us-east-1",
+	"af-south-1",
+	"ap-northeast-1",
+	"ap-southeast-2",
+	"eu-central-1",
+	"me-south-1",
+	"sa-east-1",
 }
 
 func main() {
@@ -38,86 +47,65 @@ func main() {
 			return err
 		}
 
-		regions, err := aws.GetRegions(ctx, nil, nil)
+		testerRegion := regions[testerZoneId]
+		serverRegion := regions[serverZoneId]
+
+		opt := "available"
+		var serverIp pulumi.StringOutput
+
+		serverProvider := provider{}
+		serverProvider.provider, err = aws.NewProvider(ctx, fmt.Sprintf("provider-%s", serverRegion), &aws.ProviderArgs{Region: pulumi.StringPtr(serverRegion)})
+		serverProvider.invokeOption = pulumi.Provider(serverProvider.provider)
+
+		zones, err := aws.GetAvailabilityZones(ctx, &aws.GetAvailabilityZonesArgs{State: &opt}, serverProvider.invokeOption)
 		if err != nil {
 			return err
 		}
 
-		id := 0
-		opt := "available"
-		var testerZone, serverZone string
-		var launchedTester, launchedServer bool
-		var serverIp pulumi.StringOutput
-		var testerArgs instanceArgs
-		var testerProvider provider
-		for _, region := range regions.Names {
-			if region == "ap-northeast-3" {
-				continue
+		serverZone := zones.Names[0]
+
+		serverArgs, err := getRegionArgs(ctx, serverRegion, serverProvider)
+		if err != nil {
+			return err
+		}
+
+		data, err := os.ReadFile("serve_files.sh")
+		if err != nil {
+			return err
+		}
+		serverArgs.userData = string(data)
+
+		instance, err := deployServer(ctx, fmt.Sprintf("%v-server-node", serverZone), serverProvider, serverZone, serverArgs)
+		if err != nil {
+			return err
+		}
+		ctx.Export(fmt.Sprintf("zone %v server node ip", serverZone), instance.PublicIp)
+		serverIp = instance.PublicIp
+
+		testerArgs := serverArgs
+		testerProvider := serverProvider
+		testerZone := serverZone
+		if testerZoneId != serverZoneId {
+			testerProvider.provider, err = aws.NewProvider(ctx, fmt.Sprintf("provider-%s", testerRegion), &aws.ProviderArgs{Region: pulumi.StringPtr(testerRegion)})
+			if err != nil {
+				return err
 			}
+			testerProvider.invokeOption = pulumi.Provider(testerProvider.provider)
 
-			provider := provider{}
-			provider.provider, err = aws.NewProvider(ctx, fmt.Sprintf("provider-%s", region), &aws.ProviderArgs{Region: pulumi.StringPtr(region)})
-			provider.invokeOption = pulumi.Provider(provider.provider)
-
-			zones, err := aws.GetAvailabilityZones(ctx, &aws.GetAvailabilityZonesArgs{State: &opt}, provider.invokeOption)
+			zones, err := aws.GetAvailabilityZones(ctx, &aws.GetAvailabilityZonesArgs{State: &opt}, testerProvider.invokeOption)
 			if err != nil {
 				return err
 			}
 
-			provider.availabilityZones = zones.Names
+			testerZone = zones.Names[0]
 
-			for _, zone := range zones.Names {
-				if id == testerZoneId {
-					testerZone = zone
-				}
-				if id == serverZoneId {
-					serverZone = zone
-				}
-
-				id++
-
-				if testerZone != "" && serverZone != "" {
-					break
-				}
-			}
-
-			if (serverZone != "") == launchedServer && (testerZone == "") {
-				continue
-			}
-
-			args, err := getRegionArgs(ctx, region, provider)
+			testerArgs, err = getRegionArgs(ctx, testerRegion, testerProvider)
 			if err != nil {
 				return err
-			}
-
-			if serverZone != "" && !launchedServer {
-				data, err := os.ReadFile("serve_files.sh")
-				if err != nil {
-					return err
-				}
-				args.userData = string(data)
-
-				instance, err := deployServer(ctx, fmt.Sprintf("%v-server-node", serverZone), provider, serverZone, args)
-				if err != nil {
-					return err
-				}
-				ctx.Export(fmt.Sprintf("zone %v server node ip", serverZone), instance.PublicIp)
-				serverIp = instance.PublicIp
-				launchedServer = true
-			}
-
-			if testerZone != "" && !launchedTester {
-				testerArgs = args
-				testerProvider = provider
-				launchedTester = true
-			}
-
-			if launchedTester && launchedServer {
-				break
 			}
 		}
 
-		data, err := os.ReadFile("test_protocols.sh")
+		data, err = os.ReadFile("test_protocols.sh")
 		if err != nil {
 			return err
 		}
@@ -128,7 +116,7 @@ sudo apt-get -y install awscli
 echo '%v' >> test_protocols.sh
 chmod 777 test_protocols.sh
 ./test_protocols.sh %v 1 %v
-./test_protocols.sh %v 25 %v`, string(data), ip, fileName, ip, fileName)
+./test_protocols.sh %v 5 %v`, string(data), ip, fileName, ip, fileName)
 
 			instance, err := deployServer(ctx, fmt.Sprintf("tester-node-%v", ip), testerProvider, testerZone, testerArgs)
 			if err != nil {

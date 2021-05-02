@@ -1,4 +1,0 @@
-config:
-  aws:region: us-east-1
-  pulumi-test-project:serverZone: "13"
-  pulumi-test-project:testerZone: "13"

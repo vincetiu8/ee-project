@@ -3,20 +3,25 @@ do
   sleep 1
 done
 files=$(curl "http://$1:8000/files.txt" -s)
-readarray -t file_hashes <<< "$files"
-ipfs get "${file_hashes[4]}"
-rm "${file_hashes[4]}"
+readarray -t file_data <<< "$files"
+file_names=(${file_data[0]})
+file_hashes=("${file_data[@]:1}")
+echo "File names:" "${file_names[@]}"
+echo "File hashes:" "${file_hashes[@]}"
+num_files=${#file_names[@]}
+echo "Num files:" ${#file_names[@]}
+ipfs get "${file_hashes[-1]}"
+rm "${file_hashes[-1]}"
 file_name="$3-x$2.txt"
 echo "$file_name" > "$file_name"
-file_sizes=(1M 10M 100M 1G)
-for index in {0..3}
+for ((index=0; index < $num_files; index++))
 do
-  (time -p bash -c "for _ in {1..$2}; do curl \"http://$1:8000/${file_sizes[index]}\" -o /dev/null -s; done") 2>&1 | grep -oE "[^[:space:]]+$" | tr "\n" "\t" >> "$file_name"
+  (time -p bash -c "for _ in {1..$2}; do wget -r -np \"http://$1:8000/${file_names[$index]}\" &> /dev/null; done") 2>&1 | grep -oE "[^[:space:]]+$" | tr "\n" "\t" >> "$file_name"
 done
-for index in {0..3}
+for ((index=0; index < $num_files; index++))
 do
   (time -p bash -c "for _ in {1..$2}; do ipfs get ${file_hashes[$index]} &> /dev/null; done") 2>&1 | grep -oE "[^[:space:]]+$" | tr "\n" "\t" >> "$file_name"
-  rm "${file_hashes[$index]}"
+  rm -rf "${file_hashes[$index]}"
 done
 
 cat "$file_name"
