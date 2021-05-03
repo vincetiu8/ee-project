@@ -27,12 +27,8 @@ type instanceArgs struct {
 
 var regions = []string{
 	"us-east-1",
-	"af-south-1",
 	"ap-northeast-1",
-	"ap-southeast-2",
 	"eu-central-1",
-	"me-south-1",
-	"sa-east-1",
 }
 
 func main() {
@@ -116,7 +112,7 @@ sudo apt-get -y install awscli
 echo '%v' >> test_protocols.sh
 chmod 777 test_protocols.sh
 ./test_protocols.sh %v 1 %v
-./test_protocols.sh %v 5 %v`, string(data), ip, fileName, ip, fileName)
+./test_protocols.sh %v 10 %v`, string(data), ip, fileName, ip, fileName)
 
 			instance, err := deployServer(ctx, fmt.Sprintf("tester-node-%v", ip), testerProvider, testerZone, testerArgs)
 			if err != nil {
