@@ -20,108 +20,139 @@ type provider struct {
 }
 
 type instanceArgs struct {
-	userData       string
 	amiId, groupId pulumi.StringInput
 	keyName        pulumi.StringPtrInput
+	userData       pulumi.StringPtrOutput
 }
 
 var regions = []string{
 	"us-east-1",
-	"ap-northeast-1",
+	"ap-east-1",
 	"eu-central-1",
 }
 
 func main() {
 	pulumi.Run(func(ctx *pulumi.Context) error {
 		conf := config.New(ctx, "")
-		testerZoneId, err := strconv.Atoi(conf.Require("testerZone"))
+		testerRegionId, err := strconv.Atoi(conf.Require("testerRegion"))
 		if err != nil {
 			return err
 		}
-		serverZoneId, err := strconv.Atoi(conf.Require("serverZone"))
+		hostRegionId, err := strconv.Atoi(conf.Require("hostRegion"))
 		if err != nil {
 			return err
 		}
 
-		testerRegion := regions[testerZoneId]
-		serverRegion := regions[serverZoneId]
+		regionServers := make([]int, 3)
+
+		regionServers[0], err = strconv.Atoi(conf.Require("region0Servers"))
+		if err != nil {
+			return err
+		}
+		regionServers[1], err = strconv.Atoi(conf.Require("region1Servers"))
+		if err != nil {
+			return err
+		}
+		regionServers[2], err = strconv.Atoi(conf.Require("region2Servers"))
+		if err != nil {
+			return err
+		}
+
+		var testerArgs instanceArgs
+		var testerProvider provider
+		var testerZone string
 
 		opt := "available"
+		createdServer := false
 		var serverIp pulumi.StringOutput
+		regionIds := []int{hostRegionId}
 
-		serverProvider := provider{}
-		serverProvider.provider, err = aws.NewProvider(ctx, fmt.Sprintf("provider-%s", serverRegion), &aws.ProviderArgs{Region: pulumi.StringPtr(serverRegion)})
-		serverProvider.invokeOption = pulumi.Provider(serverProvider.provider)
-
-		zones, err := aws.GetAvailabilityZones(ctx, &aws.GetAvailabilityZonesArgs{State: &opt}, serverProvider.invokeOption)
-		if err != nil {
-			return err
-		}
-
-		serverZone := zones.Names[0]
-
-		serverArgs, err := getRegionArgs(ctx, serverRegion, serverProvider)
-		if err != nil {
-			return err
-		}
-
-		data, err := os.ReadFile("serve_files.sh")
-		if err != nil {
-			return err
-		}
-		serverArgs.userData = string(data)
-
-		instance, err := deployServer(ctx, fmt.Sprintf("%v-server-node", serverZone), serverProvider, serverZone, serverArgs)
-		if err != nil {
-			return err
-		}
-		ctx.Export(fmt.Sprintf("zone %v server node ip", serverZone), instance.PublicIp)
-		serverIp = instance.PublicIp
-
-		testerArgs := serverArgs
-		testerProvider := serverProvider
-		testerZone := serverZone
-		if testerZoneId != serverZoneId {
-			testerProvider.provider, err = aws.NewProvider(ctx, fmt.Sprintf("provider-%s", testerRegion), &aws.ProviderArgs{Region: pulumi.StringPtr(testerRegion)})
-			if err != nil {
-				return err
+		for i := 0; i < 3; i++ {
+			if i != hostRegionId {
+				regionIds = append(regionIds, i)
 			}
-			testerProvider.invokeOption = pulumi.Provider(testerProvider.provider)
+		}
 
-			zones, err := aws.GetAvailabilityZones(ctx, &aws.GetAvailabilityZonesArgs{State: &opt}, testerProvider.invokeOption)
+		for _, i := range regionIds {
+			region := regions[i]
+			if regionServers[i] == 0 && testerRegionId != i {
+				continue
+			}
+
+			serverProvider := provider{}
+			serverProvider.provider, err = aws.NewProvider(ctx, fmt.Sprintf("provider-%s", region), &aws.ProviderArgs{Region: pulumi.StringPtr(region)})
+			serverProvider.invokeOption = pulumi.Provider(serverProvider.provider)
+
+			zones, err := aws.GetAvailabilityZones(ctx, &aws.GetAvailabilityZonesArgs{State: &opt}, serverProvider.invokeOption)
 			if err != nil {
 				return err
 			}
 
-			testerZone = zones.Names[0]
+			serverZone := zones.Names[0]
 
-			testerArgs, err = getRegionArgs(ctx, testerRegion, testerProvider)
+			serverArgs, err := getRegionArgs(ctx, region, serverProvider)
 			if err != nil {
 				return err
 			}
+
+			for j := 0; j < regionServers[i]; j++ {
+				serverName := fmt.Sprintf("server-%v-%v", region, j)
+				if createdServer || i != hostRegionId {
+					data, err := os.ReadFile("pin.sh")
+					if err != nil {
+						return err
+					}
+
+					serverArgs.userData = serverIp.ApplyT(func(ip string) string {
+						return fmt.Sprintf(`
+echo '%v' >> pin.sh
+chmod 777 pin.sh
+./pin.sh %v`, string(data), ip)
+					}).(pulumi.StringOutput).ToStringPtrOutput()
+
+					_, err = deployServer(ctx, serverName, serverProvider, serverZone, serverArgs)
+					if err != nil {
+						return err
+					}
+				} else {
+					data, err := os.ReadFile("serve_files.sh")
+					if err != nil {
+						return err
+					}
+					serverArgs.userData = pulumi.StringPtr(string(data)).ToStringPtrOutput()
+
+					instance, err := deployServer(ctx, serverName, serverProvider, serverZone, serverArgs)
+					if err != nil {
+						return err
+					}
+					serverIp = instance.PublicIp
+					createdServer = true
+				}
+			}
+
+			if testerRegionId == i {
+				testerArgs = serverArgs
+				testerProvider = serverProvider
+				testerZone = serverZone
+			}
 		}
 
-		data, err = os.ReadFile("test_protocols.sh")
+		data, err := os.ReadFile("test_protocols.sh")
 		if err != nil {
 			return err
 		}
-		fileName := fmt.Sprintf("server-%v-tester-%v", serverZone, testerZone)
-		serverIp.ApplyT(func(ip string) (string, error) {
-			testerArgs.userData = fmt.Sprintf(`
+		fileName := fmt.Sprintf("test-%v-%v-%v-from-%v-to-%v", regionServers[0], regionServers[1], regionServers[2], regions[hostRegionId], regions[testerRegionId])
+		numServers := regionServers[0] + regionServers[1] + regionServers[2]
+
+		testerArgs.userData = serverIp.ApplyT(func(ip string) string {
+			return fmt.Sprintf(`
 sudo apt-get -y install awscli
 echo '%v' >> test_protocols.sh
 chmod 777 test_protocols.sh
-./test_protocols.sh %v 1 %v
-./test_protocols.sh %v 10 %v`, string(data), ip, fileName, ip, fileName)
+./test_protocols.sh %v 10 %v %v`, string(data), ip, fileName, numServers)
+		}).(pulumi.StringOutput).ToStringPtrOutput()
 
-			instance, err := deployServer(ctx, fmt.Sprintf("tester-node-%v", ip), testerProvider, testerZone, testerArgs)
-			if err != nil {
-				return "", err
-			}
-
-			ctx.Export(fmt.Sprintf("zone %v tester %v node ip", testerZone, ip), instance.PublicIp)
-			return ip, nil
-		})
+		_, err = deployServer(ctx, fmt.Sprintf("tester-%v", regions[testerRegionId]), testerProvider, testerZone, testerArgs)
 
 		return nil
 	})
@@ -228,7 +259,10 @@ func deployServer(ctx *pulumi.Context, name string, provider provider, zone stri
 	if err != nil {
 		return nil, err
 	}
-	userData := pulumi.String(fmt.Sprintf("#!/bin/bash\n%v\n%v", string(data), args.userData))
+
+	userData := args.userData.ApplyT(func(userData *string) string {
+		return fmt.Sprintf("#!/bin/bash\n%v\n%v", string(data), *userData)
+	}).(pulumi.StringOutput)
 
 	return ec2.NewInstance(ctx, name, &ec2.InstanceArgs{
 		IamInstanceProfile: pulumi.String("S3FullAccess"),

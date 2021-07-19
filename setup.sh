@@ -1,11 +1,11 @@
 sudo apt-get update
-sudo apt-get -y upgrade
+sudo apt-get -qq upgrade
 wget https://dl.google.com/go/go1.16.3.linux-amd64.tar.gz
-sudo tar -xvf go1.16.3.linux-amd64.tar.gz -C /usr/local
+sudo tar -xf go1.16.3.linux-amd64.tar.gz -C /usr/local
 export PATH=$PATH:/usr/local/go/bin
 go version
 wget https://dist.ipfs.io/go-ipfs/v0.8.0/go-ipfs_v0.8.0_linux-amd64.tar.gz
-tar -xvf go-ipfs_v0.8.0_linux-amd64.tar.gz
+tar -xf go-ipfs_v0.8.0_linux-amd64.tar.gz
 sudo go-ipfs/install.sh
 rm -rf go-ipfs
 rm go1.16.3.linux-amd64.tar.gz

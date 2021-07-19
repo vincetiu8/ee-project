@@ -1,0 +1,7 @@
+config:
+  aws:region: us-east-1
+  pulumi-test-project:hostRegion: "2"
+  pulumi-test-project:region0Servers: "0"
+  pulumi-test-project:region1Servers: "0"
+  pulumi-test-project:region2Servers: "1"
+  pulumi-test-project:testerRegion: "2"

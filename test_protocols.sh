@@ -1,6 +1,6 @@
 until curl "http://$1:8000/files.txt"
 do
-  sleep 1
+  sleep 5
 done
 files=$(curl "http://$1:8000/files.txt" -s)
 readarray -t file_data <<< "$files"
@@ -8,6 +8,14 @@ file_names=(${file_data[0]})
 file_hashes=("${file_data[@]:11}")
 echo "File names:" "${file_names[@]}"
 echo "File hashes:" "${file_hashes[@]}"
+num_peers=0
+until [ $num_peers -ge "$4" ]
+do
+  sleep 5
+  num_peers=$(ipfs dht findprovs "${file_hashes[-1]}" | wc -l)
+  echo $num_peers
+done
+
 num_files=${#file_names[@]}
 echo "Num files:" ${#file_names[@]}
 ipfs get "${file_hashes[-1]}"
@@ -22,8 +30,9 @@ for ((index=0; index < $num_files; index++))
 do
   for ((i=0;i<$2;i++))
   do
-    time -p ipfs get ${file_hashes[$index]} &> /dev/null 2>&1 | grep -oE "[^[:space:]]+$" | tr "\n" "\t" >> "$file_name"
-    ipfs repo gc
+    ipfs repo gc >> /dev/null 2>&1
+    (time -p bash -c "ipfs get ${file_hashes[$index]} &> /dev/null") 2>&1 | grep -oE "[^[:space:]]+$" | tr "\n" "\t" >> "$file_name"
+    rm -rf "${file_hashes[$index]}"
   done
 done
 
